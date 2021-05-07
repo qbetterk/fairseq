@@ -184,6 +184,10 @@ def _main(cfg: DictConfig, output_file):
     num_sentences = 0
     has_target = True
     wps_meter = TimeMeter()
+
+    results_json = []
+    jac, count = 0, 0
+    lac, tlac = 0, 0
     for sample in progress:
         sample = utils.move_to_cuda(sample) if use_cuda else sample
         if "net_input" not in sample:
@@ -311,6 +315,7 @@ def _main(cfg: DictConfig, output_file):
                             ),
                             file=output_file,
                         )
+                    
                     if cfg.generation.print_alignment == "soft":
                         print(
                             "A-{}\t{}".format(
@@ -360,6 +365,24 @@ def _main(cfg: DictConfig, output_file):
                         scorer.add_string(target_str, detok_hypo_str)
                     else:
                         scorer.add(target_tokens, hypo_tokens)
+                    
+                # # # compute joint goal acc
+                # # # extract ground truth from labels
+                slots_truth = _extract_slot_from_string(target_str)
+                # # # extract generated slots from model_response
+                slots_pred = _extract_slot_from_string(hypo_str)
+
+                jac += set(slots_truth) == set(slots_pred)
+                lac += len(slots_truth) == len(slots_pred)
+                tlac += len(target_str.split()) == len(hypo_str.split())
+                count += 1
+
+                # save output results
+                results_json.append({
+                    "context" : src_str,
+                    "slots_true" : target_str,
+                    "slots_pred" : hypo_str
+                    })
 
         wps_meter.update(num_generated_tokens)
         progress.log({"wps": round(wps_meter.avg)})
@@ -367,6 +390,13 @@ def _main(cfg: DictConfig, output_file):
             sample["nsentences"] if "nsentences" in sample else sample["id"].numel()
         )
 
+    print(f"correct num: {jac}, total num: {count}")
+    print(f"jac :{jac/count}")
+    print(f"lac :{lac},  tlac: {tlac}")
+
+    with open("./output.json", "w+") as tf:
+        json.dump(results_json, tf, indent=2)
+        
     logger.info("NOTE: hypothesis and token scores are output in base 2")
     logger.info(
         "Translated {:,} sentences ({:,} tokens) in {:.1f}s ({:.2f} sentences/s, {:.2f} tokens/s)".format(
@@ -377,6 +407,7 @@ def _main(cfg: DictConfig, output_file):
             1.0 / gen_timer.avg,
         )
     )
+
     if has_target:
         if cfg.bpe and not cfg.generation.sacrebleu:
             if cfg.common_eval.post_process:
@@ -397,6 +428,48 @@ def _main(cfg: DictConfig, output_file):
 
     return scorer
 
+def _extract_slot_from_string(slots_string):
+    """
+    Either ground truth or generated result should be in the format:
+    "dom slot_type slot_val, dom slot_type slot_val, ..., dom slot_type slot_val,"
+    and this function would reformat the string into list:
+    ["dom--slot_type--slot_val", ... ]
+    """
+    domains    = ["attraction", "hotel", "hospital", "restaurant", "police", "taxi", "train"]
+
+    slot_types = ["stay", "price", "addr",  "type", "arrive", "day", "depart", "dest",
+                "area", "leave", "stars", "department", "people", "time", "food", 
+                "post", "phone", "name", 'internet', 'parking',
+                'book stay', 'book people','book time', 'book day',
+                'pricerange', 'destination', 'leaveat', 'arriveby', 'departure']
+    slots_list = []
+
+    # # # remove start and ending token
+    str_split = slots_string.strip().split()
+    if str_split != [] and str_split[0] in ["<bs>", "</bs>"]:
+        str_split = str_split[1:]
+    if "</bs>" in str_split:
+        str_split = str_split[:str_split.index("</bs>")]
+
+    # # # split according to ","
+    str_split = " ".join(str_split).split(",")
+    if str_split[-1] == "":
+        str_split = str_split[:-1]
+    str_split = [slot.strip() for slot in str_split]
+
+    for slot_ in str_split:
+        slot = slot_.split()
+        if len(slot) > 2 and slot[0] in domains:
+            domain = slot[0]
+            if slot[1] == "book" and slot[2] in ["day", "time", "people", "stay"]:
+                slot_type = slot[1]+" "+slot[2]
+                slot_val  = " ".join(slot[3:])
+            else:
+                slot_type = slot[1]
+                slot_val  = " ".join(slot[2:])
+            if not slot_val == 'dontcare':
+                slots_list.append(domain+"--"+slot_type+"--"+slot_val)
+    return slots_list
 
 def cli_main():
     parser = options.get_generation_parser()
