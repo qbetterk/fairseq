@@ -3,15 +3,16 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 from fairseq import utils
 from fairseq.iterative_refinement_generator import DecoderOut
 from fairseq.models import register_model, register_model_architecture
-from fairseq.models.nat import FairseqNATDecoder, FairseqNATModel, ensemble_decoder
+from fairseq.models.nat import FairseqNATDecoder, FairseqNATEncoder, FairseqNATModel, ensemble_decoder
 from fairseq.models.transformer import Embedding
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
-
+from fairseq.modules import PositionalEmbedding, SinusoidalPositionalEmbedding
 
 def _mean_pooling(enc_feats, src_masks):
     # enc_feats: T x B x C
@@ -78,6 +79,13 @@ class NATransformerModel(FairseqNATModel):
         if getattr(args, "apply_bert_init", False):
             decoder.apply(init_bert_params)
         return decoder
+
+    # @classmethod
+    # def build_encoder(cls, args, src_dict, embed_tokens):
+    #     encoder = NATransformerEncoder(args, src_dict, embed_tokens)
+    #     if getattr(args, "apply_bert_init", False):
+    #         encoder.apply(init_bert_params)
+    #     return encoder
 
     def forward(
         self, src_tokens, src_lengths, prev_output_tokens, tgt_tokens, **kwargs
@@ -203,6 +211,80 @@ class NATransformerModel(FairseqNATModel):
             output_tokens=initial_output_tokens, output_scores=initial_output_scores
         )
 
+# class NATransformerEncoder(FairseqNATEncoder):
+#     def __init__(self, args, dictionary, embed_tokens):
+#         super().__init__(args, dictionary, embed_tokens)
+
+#         embed_dim = embed_tokens.embedding_dim
+#         self.embed_positions = (
+#             PositionalEmbedding(
+#                 args.max_source_positions,  # 1024
+#                 embed_dim,                  # 512
+#                 self.padding_idx,           # 1
+#                 learned=args.encoder_learned_pos,
+#             )
+#             if not args.no_token_positional_embeddings
+#             else None
+#         )
+
+#         self.embed_positions2 = (
+#             PositionalEmbedding(
+#                 args.max_source_positions,
+#                 embed_dim,
+#                 self.padding_idx,
+#                 learned=args.encoder_learned_pos,
+#             )
+#             if not args.no_token_positional_embeddings
+#             else None
+#         )
+
+#     def forward_embedding(
+#         self, src_tokens, token_embedding: Optional[torch.Tensor] = None
+#     ):
+#         # embed tokens and positions
+#         if token_embedding is None:
+#             token_embedding = self.embed_tokens(src_tokens)
+#         x = embed = self.embed_scale * token_embedding
+#         # import pdb
+#         # pdb.set_trace()
+#         if self.embed_positions is not None:
+#             x = embed + self.embed_positions(src_tokens)
+#         if self.layernorm_embedding is not None:
+#             x = self.layernorm_embedding(x)
+#         x = self.dropout_module(x)
+#         if self.quant_noise is not None:
+#             x = self.quant_noise(x)
+#         return x, embed
+    
+#     def max_positions(self):
+#         """Maximum input length supported by the encoder."""
+#         if self.embed_positions is None:
+#             return self.max_source_positions
+#         return min(self.max_source_positions, self.embed_positions.max_positions)
+
+#     def upgrade_state_dict_named(self, state_dict, name):
+#         """Upgrade a (possibly old) state dict for new versions of fairseq."""
+#         if isinstance(self.embed_positions, SinusoidalPositionalEmbedding):
+#             weights_key = "{}.embed_positions.weights".format(name)
+#             if weights_key in state_dict:
+#                 print("deleting {0}".format(weights_key))
+#                 del state_dict[weights_key]
+#             state_dict[
+#                 "{}.embed_positions._float_tensor".format(name)
+#             ] = torch.FloatTensor(1)
+#         for i in range(self.num_layers):
+#             # update layer norms
+#             self.layers[i].upgrade_state_dict_named(
+#                 state_dict, "{}.layers.{}".format(name, i)
+#             )
+
+#         version_key = "{}.version".format(name)
+#         if utils.item(state_dict.get(version_key, torch.Tensor([1]))[0]) < 2:
+#             # earlier checkpoints did not normalize after the stack of layers
+#             self.layer_norm = None
+#             self.normalize = False
+#             state_dict[version_key] = torch.Tensor([1])
+#         return state_dict
 
 class NATransformerDecoder(FairseqNATDecoder):
     def __init__(self, args, dictionary, embed_tokens, no_encoder_attn=False):
@@ -220,6 +302,27 @@ class NATransformerDecoder(FairseqNATDecoder):
         self.length_loss_factor = getattr(args, "length_loss_factor", 0.1)
         self.src_embedding_copy = getattr(args, "src_embedding_copy", False)
         self.embed_length = Embedding(256, self.encoder_embed_dim, None)
+        
+        self.embed_positions = (
+            PositionalEmbedding(
+                args.max_target_positions,
+                args.decoder_embed_dim,
+                self.padding_idx,   #  was self.padding_idx
+                learned=args.decoder_learned_pos,
+            )
+            if not args.no_token_positional_embeddings
+            else None
+        )
+        self.embed_positions2 = (
+            PositionalEmbedding(
+                args.max_target_positions,
+                args.decoder_embed_dim,
+                None,
+                learned=args.decoder_learned_pos,
+            )
+            if not args.no_token_positional_embeddings
+            else None
+        )
 
     @ensemble_decoder
     def forward(self, normalize, encoder_out, prev_output_tokens, step=0, **unused):
@@ -243,6 +346,59 @@ class NATransformerDecoder(FairseqNATDecoder):
             enc_feats = enc_feats.detach()
         length_out = F.linear(enc_feats, self.embed_length.weight)
         return F.log_softmax(length_out, -1) if normalize else length_out
+
+    def max_positions(self):
+        """Maximum output length supported by the decoder."""
+        if self.embed_positions is None:
+            return self.max_target_positions
+        return min(self.max_target_positions, self.embed_positions.max_positions)
+
+    def upgrade_state_dict_named(self, state_dict, name):
+        """Upgrade a (possibly old) state dict for new versions of fairseq."""
+        if isinstance(self.embed_positions, SinusoidalPositionalEmbedding):
+            weights_key = "{}.embed_positions.weights".format(name)
+            if weights_key in state_dict:
+                del state_dict[weights_key]
+            state_dict[
+                "{}.embed_positions._float_tensor".format(name)
+            ] = torch.FloatTensor(1)
+
+        if f"{name}.output_projection.weight" not in state_dict:
+            if self.share_input_output_embed:
+                embed_out_key = f"{name}.embed_tokens.weight"
+            else:
+                embed_out_key = f"{name}.embed_out"
+            if embed_out_key in state_dict:
+                state_dict[f"{name}.output_projection.weight"] = state_dict[
+                    embed_out_key
+                ]
+                if not self.share_input_output_embed:
+                    del state_dict[embed_out_key]
+
+        for i in range(self.num_layers):
+            # update layer norms
+            layer_norm_map = {
+                "0": "self_attn_layer_norm",
+                "1": "encoder_attn_layer_norm",
+                "2": "final_layer_norm",
+            }
+            for old, new in layer_norm_map.items():
+                for m in ("weight", "bias"):
+                    k = "{}.layers.{}.layer_norms.{}.{}".format(name, i, old, m)
+                    if k in state_dict:
+                        state_dict[
+                            "{}.layers.{}.{}.{}".format(name, i, new, m)
+                        ] = state_dict[k]
+                        del state_dict[k]
+
+        version_key = "{}.version".format(name)
+        if utils.item(state_dict.get(version_key, torch.Tensor([1]))[0]) <= 2:
+            # earlier checkpoints did not normalize after the stack of layers
+            self.layer_norm = None
+            self.normalize = False
+            state_dict[version_key] = torch.Tensor([1])
+
+        return state_dict
 
     def extract_features(
         self,
@@ -329,10 +485,25 @@ class NATransformerDecoder(FairseqNATDecoder):
         return x, {"attn": attn, "inner_states": inner_states}
 
     def forward_embedding(self, prev_output_tokens, states=None):
+        pad_mask = prev_output_tokens.ne(self.padding_idx).int()
+        unk_mask = prev_output_tokens.eq(self.unk).int()
+        # compute position within slot
+        position_x = torch.cumsum(pad_mask, dim=1).type_as(unk_mask)
+        position_x -= torch.cummax(position_x * unk_mask, dim=1)[0].type_as(unk_mask) - 1
+        position_x = (position_x * pad_mask).long() + self.padding_idx
+
         # embed positions
-        positions = (
-            self.embed_positions(prev_output_tokens)
+        positions_x = (
+            self.embed_positions(prev_output_tokens, positions=position_x)
             if self.embed_positions is not None
+            else None
+        )
+
+        # compute position slot-wise 
+        position_y = (torch.cumsum(unk_mask, dim=1).type_as(unk_mask) * pad_mask).long() + self.padding_idx
+        positions_y = (
+            self.embed_positions2(prev_output_tokens, positions=position_y)
+            if self.embed_positions2 is not None
             else None
         )
 
@@ -344,8 +515,10 @@ class NATransformerDecoder(FairseqNATDecoder):
         else:
             x = states
 
-        if positions is not None:
-            x += positions
+        if positions_x is not None:
+            x += positions_x
+        if positions_y is not None:
+            x += positions_y
         x = self.dropout_module(x)
         decoder_padding_mask = prev_output_tokens.eq(self.padding_idx)
         return x, decoder_padding_mask
@@ -380,9 +553,12 @@ class NATransformerDecoder(FairseqNATDecoder):
                 src_lengs = (~src_masks).transpose(0, 1).type_as(enc_feats).sum(0)
             src_lengs = src_lengs.long()
 
+        # import pdb
+        # pdb.set_trace()
         if tgt_tokens is not None:
             # obtain the length target
-            tgt_lengs = tgt_tokens.ne(self.padding_idx).sum(1).long()
+            # tgt_lengs = tgt_tokens.ne(self.padding_idx).sum(1).long()
+            tgt_lengs = tgt_tokens.eq(6).sum(1).long()
             if self.pred_length_offset:
                 length_tgt = tgt_lengs - src_lengs + 128
             else:
