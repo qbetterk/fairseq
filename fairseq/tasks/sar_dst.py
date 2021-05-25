@@ -30,6 +30,13 @@ class DSTSemiAutoRegressiveTask(TranslationTask):
     Translation (Sequence Generation) task for Levenshtein Transformer
     See `"Levenshtein Transformer" <https://arxiv.org/abs/1905.11006>`_.
     """
+    # def __init__(self, args, src_dict, tgt_dict):
+    #     super().__init__(args, src_dict, tgt_dict)
+    #     self.langs = args.langs.split(",")
+    #     for d in [src_dict, tgt_dict]:
+    #         for l in self.langs:
+    #             d.add_symbol("[{}]".format(l))
+    #         d.add_symbol("<mask>")
 
     cfg: TranslationLevenshteinConfig
 
@@ -123,7 +130,12 @@ class DSTSemiAutoRegressiveTask(TranslationTask):
         loss, sample_size, logging_output = criterion(model, sample)
         if ignore_grad:
             loss *= 0
+        # import pdb
+        # pdb.set_trace()
         optimizer.backward(loss)
+        # import pdb
+        # pdb.set_trace()
+        
         return loss, sample_size, logging_output
 
     def valid_step(self, sample, model, criterion):

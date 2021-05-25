@@ -111,7 +111,7 @@ class MultiprocessingEncoder(object):
         """
         enc_lines = []
         for line in lines:
-            line = line.strip()
+            # line = line.strip()
             if len(line) == 0 and not self.args.keep_empty:
                 return ["EMPTY", None]
             tokens = self.encode(line)

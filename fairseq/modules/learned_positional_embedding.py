@@ -35,9 +35,9 @@ class LearnedPositionalEmbedding(nn.Embedding):
         positions: Optional[Tensor] = None,
     ):
         """Input is expected to be of size [bsz x seqlen]."""
-        assert (positions is None) or (
-            self.padding_idx is None
-        ), "If positions is pre-computed then padding_idx should not be set."
+        # assert (positions is None) or (
+        #     self.padding_idx is None
+        # ), "If positions is pre-computed then padding_idx should not be set."
 
         if positions is None:
             if incremental_state is not None:
@@ -50,6 +50,8 @@ class LearnedPositionalEmbedding(nn.Embedding):
                 positions = utils.make_positions(
                     input, self.padding_idx, onnx_trace=self.onnx_trace
                 )
+                # import pdb
+                # pdb.set_trace()
         return F.embedding(
             positions,
             self.weight,

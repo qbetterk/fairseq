@@ -40,6 +40,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     level=os.environ.get("LOGLEVEL", "INFO").upper(),
     stream=sys.stdout,
+    force=True,
 )
 logger = logging.getLogger("fairseq_cli.train")
 
@@ -70,7 +71,7 @@ def main(cfg: FairseqConfig) -> None:
         checkpoint_utils.verify_checkpoint_directory(cfg.checkpoint.save_dir)
 
     # Print args
-    logger.info(cfg)
+    # logger.info(cfg)
 
     if cfg.checkpoint.write_checkpoints_asynchronously:
         try:
@@ -94,7 +95,7 @@ def main(cfg: FairseqConfig) -> None:
     else:
         model = task.build_model(cfg.model)
     criterion = task.build_criterion(cfg.criterion)
-    logger.info(model)
+    # logger.info(model)
     logger.info("task: {}".format(task.__class__.__name__))
     logger.info("model: {}".format(model.__class__.__name__))
     logger.info("criterion: {}".format(criterion.__class__.__name__))
@@ -282,7 +283,8 @@ def train(
             "train_step-%d" % i
         ):
             log_output = trainer.train_step(samples)
-
+        # import pdb
+        # pdb.set_trace()
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats
             num_updates = trainer.get_num_updates()

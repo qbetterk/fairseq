@@ -14,6 +14,7 @@ import os
 import sys
 from argparse import Namespace
 from itertools import chain
+import json
 
 import numpy as np
 import torch
@@ -62,6 +63,7 @@ def _main(cfg: DictConfig, output_file):
         datefmt="%Y-%m-%d %H:%M:%S",
         level=os.environ.get("LOGLEVEL", "INFO").upper(),
         stream=output_file,
+        force=True,
     )
     logger = logging.getLogger("fairseq_cli.generate")
 
@@ -168,6 +170,8 @@ def _main(cfg: DictConfig, output_file):
         models, cfg.generation, extra_gen_cls_kwargs=extra_gen_cls_kwargs
     )
 
+    # import pdb
+    # pdb.set_trace()
     # Handle tokenization and BPE
     tokenizer = task.build_tokenizer(cfg.tokenizer)
     bpe = task.build_bpe(cfg.bpe)
@@ -185,9 +189,11 @@ def _main(cfg: DictConfig, output_file):
     has_target = True
     wps_meter = TimeMeter()
 
+    # customized metrics
     results_json = []
-    jac, count = 0, 0
+    jac, count = 0, 0 # for dst
     lac, tlac = 0, 0
+
     for sample in progress:
         sample = utils.move_to_cuda(sample) if use_cuda else sample
         if "net_input" not in sample:
@@ -202,6 +208,8 @@ def _main(cfg: DictConfig, output_file):
             constraints = sample["constraints"]
 
         gen_timer.start()
+        # import pdb
+        # pdb.set_trace()
         hypos = task.inference_step(
             generator,
             models,
@@ -251,16 +259,17 @@ def _main(cfg: DictConfig, output_file):
                             generator
                         ),
                     )
-
+            # import pdb
+            # pdb.set_trace()
             src_str = decode_fn(src_str)
-            if has_target:
-                target_str = decode_fn(target_str)
+            # if has_target:
+            #     target_str = decode_fn(target_str)
 
             if not cfg.common_eval.quiet:
                 if src_dict is not None:
                     print("S-{}\t{}".format(sample_id, src_str), file=output_file)
                 if has_target:
-                    print("T-{}\t{}".format(sample_id, target_str), file=output_file)
+                    print("T-{}\t{}".format(sample_id, decode_fn(target_str)), file=output_file)
 
             # Process top predictions
             for j, hypo in enumerate(hypos[i][: cfg.generation.nbest]):
@@ -273,6 +282,9 @@ def _main(cfg: DictConfig, output_file):
                     remove_bpe=cfg.common_eval.post_process,
                     extra_symbols_to_ignore=get_symbols_to_strip_from_output(generator),
                 )
+                # if "<pad>" in x:
+                #     import pdb
+                #     pdb.set_trace()
                 detok_hypo_str = decode_fn(hypo_str)
                 if not cfg.common_eval.quiet:
                     score = hypo["score"] / math.log(2)  # convert to base 2
@@ -359,29 +371,31 @@ def _main(cfg: DictConfig, output_file):
                             target_str, add_if_not_exist=True
                         )
                         hypo_tokens = tgt_dict.encode_line(
-                            detok_hypo_str, add_if_not_exist=True
+                            hypo_str, add_if_not_exist=True
                         )
                     if hasattr(scorer, "add_string"):
                         scorer.add_string(target_str, detok_hypo_str)
                     else:
                         scorer.add(target_tokens, hypo_tokens)
-                    
+                # import pdb
+                # pdb.set_trace()
+                target_str = decode_fn(target_str)
                 # # # compute joint goal acc
                 # # # extract ground truth from labels
                 slots_truth = _extract_slot_from_string(target_str)
                 # # # extract generated slots from model_response
-                slots_pred = _extract_slot_from_string(hypo_str)
+                slots_pred = _extract_slot_from_string(detok_hypo_str)
 
                 jac += set(slots_truth) == set(slots_pred)
                 lac += len(slots_truth) == len(slots_pred)
-                tlac += len(target_str.split()) == len(hypo_str.split())
+                tlac += len(target_str.split()) == len(detok_hypo_str.split())
                 count += 1
 
                 # save output results
                 results_json.append({
                     "context" : src_str,
                     "slots_true" : target_str,
-                    "slots_pred" : hypo_str
+                    "slots_pred" : detok_hypo_str
                     })
 
         wps_meter.update(num_generated_tokens)
@@ -390,13 +404,13 @@ def _main(cfg: DictConfig, output_file):
             sample["nsentences"] if "nsentences" in sample else sample["id"].numel()
         )
 
-    print(f"correct num: {jac}, total num: {count}")
-    print(f"jac :{jac/count}")
-    print(f"lac :{lac},  tlac: {tlac}")
+    print(f"correct num: {jac}, total num: {count}", file=output_file,)
+    print(f"jac :{jac/count}", file=output_file,)
+    print(f"lac :{lac/count},  tlac: {tlac/count}", file=output_file,)
 
-    with open("./output.json", "w+") as tf:
+    with open(os.path.join(cfg.common_eval.results_path, "./output.json"), "w+") as tf:
         json.dump(results_json, tf, indent=2)
-        
+
     logger.info("NOTE: hypothesis and token scores are output in base 2")
     logger.info(
         "Translated {:,} sentences ({:,} tokens) in {:.1f}s ({:.2f} sentences/s, {:.2f} tokens/s)".format(

@@ -25,6 +25,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     level=os.environ.get("LOGLEVEL", "INFO").upper(),
     stream=sys.stdout,
+    force=True,
 )
 logger = logging.getLogger("fairseq_cli.preprocess")
 
@@ -158,7 +159,7 @@ def main(args):
         )
         merge_result(
             Binarizer.binarize(
-                input_file, vocab, lambda t: ds.add_item(t), offset=0, end=offsets[1]
+                input_file, vocab, lambda t: ds.add_item(t), offset=0, end=offsets[1], sar=args.sar, split=args.split
             )
         )
         if num_workers > 1:
@@ -171,7 +172,6 @@ def main(args):
                 os.remove(indexed_dataset.index_file_path(temp_file_path))
 
         ds.finalize(dataset_dest_file(args, output_prefix, lang, "idx"))
-
         logger.info(
             "[{}] {}: {} sents, {} tokens, {:.3}% replaced by {}".format(
                 lang,
@@ -390,6 +390,8 @@ def get_offsets(input_file, num_workers):
 
 def cli_main():
     parser = options.get_preprocessing_parser()
+    parser.add_argument("--sar", action='store_true')
+    parser.add_argument("--split", type=str, default="6")
     args = parser.parse_args()
     main(args)
 

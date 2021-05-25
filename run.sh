@@ -2,7 +2,7 @@
 #
 set -xue
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 text=data/MULTIWOZ2.2
 output_dir=data/MULTIWOZ2.2
@@ -15,7 +15,7 @@ model_dir=checkpoint/checkpoint_multiwoz
 # data_dir=${output_dir}/data-bin-all
 data_dir=${output_dir}/data-bin
 
-# text=data/MULTIWOZ2.2/sep_com # separate comma: value ,
+text=data/MULTIWOZ2.2/sep_com # separate comma: value ,
 data_dir=${output_dir}/data-bin-sep
 model_dir=checkpoint/checkpoint_multiwoz_sep
 
@@ -25,22 +25,25 @@ model_dir=checkpoint/checkpoint_multiwoz_sep
 #                      --workers 60 --joined-dictionary \
 #                      --srcdict ${data_dir}/dict.text.txt
 
-# data_dir=${output_dir}/data-bin-sep-dict # separate comma and saparate dictionary
-# model_dir=checkpoint/checkpoint_multiwoz_sep_dict2
+data_dir=${output_dir}/data-bin-sep-dict # separate comma and saparate dictionary
+model_dir=checkpoint/checkpoint_multiwoz_sep_dict
+
+data_dir=${output_dir}/data-bin-sep-dict-sar # add <\s> during preprocess
+model_dir=checkpoint/checkpoint_multiwoz_sep_dict_sar
 # fairseq-preprocess --source-lang ${src} --target-lang ${tgt} \
 #                      --trainpref $text/train --validpref $text/valid \
 #                      --testpref $text/test --destdir ${data_dir} \
-#                      --workers 60 \
-#                      --srcdict ${data_dir}/dict.text.txt \
-#                      --tgtdict ${data_dir}/dict.slot.txt
-
+#                      --workers 100 \
+#                      --srcdict ${output_dir}/data-bin-sep-dict/dict.text.txt \
+#                      --tgtdict ${output_dir}/data-bin-sep-dict/dict.slot.txt \
+#                      --sar
 
 
 # mkdir -p ${model_dir}
 # fairseq-train \
 #     ${data_dir} \
-#     --ddp-backend=c10d \
-#     --task translation_lev \
+#     --ddp-backend=legacy_ddp \
+#     --task sar_dst \
 #     --criterion nat_loss \
 #     --arch cmlm_transformer \
 #     --noise random_mask \
@@ -61,9 +64,17 @@ model_dir=checkpoint/checkpoint_multiwoz_sep
 #     --save-dir ${model_dir} \
 #     --batch-size 512 \
 #     --best-checkpoint-metric length \
-#     --max-epoch 100 \
-#     --length-loss-factor 0.1 \
-#     --no-epoch-checkpoints 2>&1 | tee ${model_dir}/train.log
+#     --max-epoch 80 --save-interval 5 \
+#     --length-loss-factor 1.0 \
+#     --tensorboard-logdir ${model_dir} \
+#     --encoder-layers 6 \
+#     --decoder-layers 6 \
+#     --encoder-embed-dim 768 \
+#     --decoder-embed-dim 768 \
+#     --encoder-ffn-embed-dim 3072 \
+#     --decoder-ffn-embed-dim 3072 \
+#     --encoder-attention-heads 16 \
+#     --decoder-attention-heads 16 # 2>&1 | tee ${model_dir}/train.log
 #     # --save-interval 5 #2>&1 | tee ${model_dir}/train.log
 
 # fairseq-generate \
@@ -77,6 +88,7 @@ model_dir=checkpoint/checkpoint_multiwoz_sep
 #     --batch-size 256 --quiet --results-path ${model_dir}/output
 
 
+text=data/MULTIWOZ2.2
 # # # # # # # # # # # # # # # # # # # # # # # #
 # # # # # # # # # # # # # # BART large
 # # # # # # # # # # # # # # # # # # # # # # # #
@@ -250,12 +262,16 @@ data_dir=${output_dir}/data-bin-base-sar
 #   --tgtdict ../pretrain/bart.base/dict.txt \
 #   --sar
 
+export CUDA_VISIBLE_DEVICES=1
+model_dir=checkpoint/checkpoint_multiwoz_bart_sar_pos_keep_enc
 model_dir=checkpoint/checkpoint_multiwoz_bart_sar_pos
+# model_dir=checkpoint/checkpoint_multiwoz_bart_sar
+# model_dir=checkpoint/checkpoint_multiwoz
 
 mkdir -p $model_dir
 fairseq-train \
     ${data_dir} \
-    --ddp-backend=c10d \
+    --ddp-backend=legacy_ddp \
     --task sar_dst \
     --criterion nat_loss \
     --arch cmlm_transformer \
@@ -274,9 +290,10 @@ fairseq-train \
     --max-update 300000 \
     --seed 0 \
     --fp16 \
+    --log-interval 10 \
     --save-dir ${model_dir} \
-    --batch-size 256 \
-    --max-epoch 60 --save-interval 5 \
+    --batch-size 4 \
+    --max-epoch 81 --save-interval 5 \
     --tensorboard-logdir ${model_dir} \
     --encoder-layers 6 \
     --decoder-layers 6 \
@@ -286,23 +303,27 @@ fairseq-train \
     --decoder-ffn-embed-dim 3072 \
     --encoder-attention-heads 16 \
     --decoder-attention-heads 16 \
-    --restore-file ../pretrain/bart.base/model.pt \
-    --reset-optimizer --reset-dataloader --reset-meters \
-    --length-loss-factor 0.1 2>&1 | tee ${model_dir}/train.log
+    --length-loss-factor 1.0 \
+    --restore-file ${model_dir}/checkpoint_best.pt
+    # --encoder-layers-to-keep 6 \
+    # --restore-file ../pretrain/bart.base/model.pt \
+    # --reset-optimizer --reset-dataloader --reset-meters \
+    # --length-loss-factor 0.1 2>&1 | tee ${model_dir}/train.log
 
+# # # # export CUDA_LAUNCH_BLOCKING=1
 # fairseq-generate \
 #     ${data_dir} \
 #     --gen-subset test \
 #     --task sar_dst \
-#     --path ${model_dir}/checkpoint_best.pt \
-#     --iter-decode-max-iter 9 \
+#     --path ${model_dir}/checkpoint_last.pt \
+#     --iter-decode-max-iter 0 \
 #     --iter-decode-eos-penalty 0 \
 #     --iter-decode-with-beam 1 \
-#     --beam 3 --remove-bpe \
-#     --batch-size 2 --quiet --results-path ${model_dir}/output --bpe gpt2
+#     --beam 5 --remove-bpe \
+#     --batch-size 4 --results-path ${model_dir}/output --bpe gpt2 --quiet
 
 # # # # # # # # # # Using AR 
-model_dir=checkpoint/checkpoint_multiwoz_bart_base_ar2
+# model_dir=checkpoint/checkpoint_multiwoz_bart_base_ar2
 # mkdir -p $model_dir
 # fairseq-train \
 #     ${data_dir} \
@@ -350,6 +371,8 @@ model_dir=checkpoint/checkpoint_multiwoz_bart_base_ar2
 #     --beam 3 --remove-bpe \
 #     --batch-size 64 --quiet --results-path ${model_dir}/output --bpe gpt2
 
-
+# fairseq-generate data-bin/wmt14.en-fr.newstest2014  \
+#     --path data-bin/wmt14.en-fr.fconv-py/model.pt \
+#     --beam 1 --batch-size 3 --remove-bpe
 
 

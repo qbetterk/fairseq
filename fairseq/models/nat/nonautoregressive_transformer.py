@@ -166,8 +166,8 @@ class NATransformerModel(FairseqNATModel):
         initial_output_tokens.masked_fill_(
             idx_length[None, :] < length_tgt[:, None], self.unk
         )
-        initial_output_tokens[:, 0] = self.bos
-        initial_output_tokens.scatter_(1, length_tgt[:, None] - 1, self.eos)
+        # initial_output_tokens[:, 0] = self.bos
+        # initial_output_tokens.scatter_(1, length_tgt[:, None] - 1, self.eos)
 
         initial_output_scores = initial_output_tokens.new_zeros(
             *initial_output_tokens.size()
@@ -180,6 +180,7 @@ class NATransformerModel(FairseqNATModel):
             step=0,
             max_step=0,
             history=None,
+            output_slots=None,
         )
 
     def regenerate_length_beam(self, decoder_out, beam_size):
@@ -190,7 +191,7 @@ class NATransformerModel(FairseqNATModel):
             + utils.new_arange(length_tgt, 1, beam_size)
             - beam_size // 2
         )
-        length_tgt = length_tgt.view(-1).clamp_(min=2)
+        length_tgt = length_tgt.view(-1).clamp_(min=0)
         max_length = length_tgt.max()
         idx_length = utils.new_arange(length_tgt, max_length)
 
@@ -200,8 +201,8 @@ class NATransformerModel(FairseqNATModel):
         initial_output_tokens.masked_fill_(
             idx_length[None, :] < length_tgt[:, None], self.unk
         )
-        initial_output_tokens[:, 0] = self.bos
-        initial_output_tokens.scatter_(1, length_tgt[:, None] - 1, self.eos)
+        # initial_output_tokens[:, 0] = self.bos
+        # initial_output_tokens.scatter_(1, length_tgt[:, None] - 1, self.eos)
 
         initial_output_scores = initial_output_tokens.new_zeros(
             *initial_output_tokens.size()
@@ -211,80 +212,6 @@ class NATransformerModel(FairseqNATModel):
             output_tokens=initial_output_tokens, output_scores=initial_output_scores
         )
 
-# class NATransformerEncoder(FairseqNATEncoder):
-#     def __init__(self, args, dictionary, embed_tokens):
-#         super().__init__(args, dictionary, embed_tokens)
-
-#         embed_dim = embed_tokens.embedding_dim
-#         self.embed_positions = (
-#             PositionalEmbedding(
-#                 args.max_source_positions,  # 1024
-#                 embed_dim,                  # 512
-#                 self.padding_idx,           # 1
-#                 learned=args.encoder_learned_pos,
-#             )
-#             if not args.no_token_positional_embeddings
-#             else None
-#         )
-
-#         self.embed_positions2 = (
-#             PositionalEmbedding(
-#                 args.max_source_positions,
-#                 embed_dim,
-#                 self.padding_idx,
-#                 learned=args.encoder_learned_pos,
-#             )
-#             if not args.no_token_positional_embeddings
-#             else None
-#         )
-
-#     def forward_embedding(
-#         self, src_tokens, token_embedding: Optional[torch.Tensor] = None
-#     ):
-#         # embed tokens and positions
-#         if token_embedding is None:
-#             token_embedding = self.embed_tokens(src_tokens)
-#         x = embed = self.embed_scale * token_embedding
-#         # import pdb
-#         # pdb.set_trace()
-#         if self.embed_positions is not None:
-#             x = embed + self.embed_positions(src_tokens)
-#         if self.layernorm_embedding is not None:
-#             x = self.layernorm_embedding(x)
-#         x = self.dropout_module(x)
-#         if self.quant_noise is not None:
-#             x = self.quant_noise(x)
-#         return x, embed
-    
-#     def max_positions(self):
-#         """Maximum input length supported by the encoder."""
-#         if self.embed_positions is None:
-#             return self.max_source_positions
-#         return min(self.max_source_positions, self.embed_positions.max_positions)
-
-#     def upgrade_state_dict_named(self, state_dict, name):
-#         """Upgrade a (possibly old) state dict for new versions of fairseq."""
-#         if isinstance(self.embed_positions, SinusoidalPositionalEmbedding):
-#             weights_key = "{}.embed_positions.weights".format(name)
-#             if weights_key in state_dict:
-#                 print("deleting {0}".format(weights_key))
-#                 del state_dict[weights_key]
-#             state_dict[
-#                 "{}.embed_positions._float_tensor".format(name)
-#             ] = torch.FloatTensor(1)
-#         for i in range(self.num_layers):
-#             # update layer norms
-#             self.layers[i].upgrade_state_dict_named(
-#                 state_dict, "{}.layers.{}".format(name, i)
-#             )
-
-#         version_key = "{}.version".format(name)
-#         if utils.item(state_dict.get(version_key, torch.Tensor([1]))[0]) < 2:
-#             # earlier checkpoints did not normalize after the stack of layers
-#             self.layer_norm = None
-#             self.normalize = False
-#             state_dict[version_key] = torch.Tensor([1])
-#         return state_dict
 
 class NATransformerDecoder(FairseqNATDecoder):
     def __init__(self, args, dictionary, embed_tokens, no_encoder_attn=False):
@@ -313,6 +240,7 @@ class NATransformerDecoder(FairseqNATDecoder):
             if not args.no_token_positional_embeddings
             else None
         )
+        self.embed_positions2 = None
         self.embed_positions2 = (
             PositionalEmbedding(
                 args.max_target_positions,
@@ -324,15 +252,21 @@ class NATransformerDecoder(FairseqNATDecoder):
             else None
         )
 
+        self.num_layers = len(self.layers)
+
     @ensemble_decoder
-    def forward(self, normalize, encoder_out, prev_output_tokens, step=0, **unused):
-        features, _ = self.extract_features(
+    def forward(self, normalize, encoder_out, prev_output_tokens, incremental_state=None, step=0, **unused):
+        self.slot_pos = unused.get("slot_pos", None)
+        features, extra = self.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
             embedding_copy=(step == 0) & self.src_embedding_copy,
+            incremental_state=incremental_state,
         )
         decoder_out = self.output_layer(features)
-        return F.log_softmax(decoder_out, -1) if normalize else decoder_out
+        # import pdb
+        # pdb.set_trace()
+        return F.log_softmax(decoder_out, -1) if normalize else decoder_out, extra
 
     @ensemble_decoder
     def forward_length(self, normalize, encoder_out):
@@ -406,7 +340,7 @@ class NATransformerDecoder(FairseqNATDecoder):
         encoder_out=None,
         early_exit=None,
         embedding_copy=False,
-        **unused
+        incremental_state=None,
     ):
         """
         Similar to *forward* but only return features.
@@ -433,22 +367,30 @@ class NATransformerDecoder(FairseqNATDecoder):
                 if src_mask is not None
                 else prev_output_tokens.new_ones(*src_embd.size()[:2]).bool()
             )
-
             x, decoder_padding_mask = self.forward_embedding(
                 prev_output_tokens,
                 self.forward_copying_source(
                     src_embd, src_mask, prev_output_tokens.ne(self.padding_idx)
                 ),
+                encoder_out=encoder_out,
+                incremental_state=incremental_state,
             )
 
         else:
 
-            x, decoder_padding_mask = self.forward_embedding(prev_output_tokens)
+            x, decoder_padding_mask = self.forward_embedding(
+                                            prev_output_tokens, 
+                                            encoder_out=encoder_out, 
+                                            incremental_state=incremental_state,
+                                        )
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
-        attn = None
-        inner_states = [x]
+        # import pdb
+        # pdb.set_trace()
+        # decoder layers
+        attn: Optional[Tensor] = None
+        inner_states: List[Optional[Tensor]] = [x]
 
         # decoder layers
         for i, layer in enumerate(self.layers):
@@ -457,7 +399,7 @@ class NATransformerDecoder(FairseqNATDecoder):
             if (early_exit is not None) and (i >= early_exit):
                 break
 
-            x, attn, _ = layer(
+            x, layer_attn, _ = layer(
                 x,
                 encoder_out["encoder_out"][0]
                 if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
@@ -468,10 +410,19 @@ class NATransformerDecoder(FairseqNATDecoder):
                     and len(encoder_out["encoder_padding_mask"]) > 0
                 )
                 else None,
+                incremental_state=incremental_state,
                 self_attn_mask=None,
                 self_attn_padding_mask=decoder_padding_mask,
+                need_attn=bool((i == self.num_layers - 1)),
+                need_head_weights=bool((i == self.num_layers - 1)),
             )
-            inner_states.append(x)
+            inner_states.append(x)            
+            if layer_attn is not None and i == self.num_layers - 1:
+                attn = layer_attn.float().to(x)
+
+        if attn is not None:
+            # average probabilities over heads
+            attn = attn.mean(dim=0)
 
         if self.layer_norm:
             x = self.layer_norm(x)
@@ -482,30 +433,66 @@ class NATransformerDecoder(FairseqNATDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
+        # import pdb
+        # pdb.set_trace()
         return x, {"attn": attn, "inner_states": inner_states}
 
-    def forward_embedding(self, prev_output_tokens, states=None):
-        pad_mask = prev_output_tokens.ne(self.padding_idx).int()
-        unk_mask = prev_output_tokens.eq(self.unk).int()
-        # compute position within slot
-        position_x = torch.cumsum(pad_mask, dim=1).type_as(unk_mask)
-        position_x -= torch.cummax(position_x * unk_mask, dim=1)[0].type_as(unk_mask) - 1
-        position_x = (position_x * pad_mask).long() + self.padding_idx
+    def forward_embedding(self, prev_output_tokens, states=None, encoder_out=None, incremental_state=None, **unused):
 
-        # embed positions
-        positions_x = (
-            self.embed_positions(prev_output_tokens, positions=position_x)
-            if self.embed_positions is not None
-            else None
-        )
+        # # embed positions (original 1-D)
+        # positions_x = (
+        #     self.embed_positions(prev_output_tokens)
+        #     if self.embed_positions is not None
+        #     else None
+        # )
+        # import pdb
+        # pdb.set_trace()
+        ##########################################################################
+        if incremental_state is None:
+            pad_mask = prev_output_tokens.ne(self.padding_idx).int()
+            unk_mask = prev_output_tokens.eq(self.unk).int()
+            # compute position within slot
+            # import pdb
+            # pdb.set_trace()
+            position_x = torch.cumsum(pad_mask, dim=-1).type_as(unk_mask)
+            position_x -= torch.cummax(position_x * unk_mask, dim=1)[0].type_as(unk_mask) - 1
+            position_x = (position_x * pad_mask).long() + self.padding_idx
 
-        # compute position slot-wise 
-        position_y = (torch.cumsum(unk_mask, dim=1).type_as(unk_mask) * pad_mask).long() + self.padding_idx
-        positions_y = (
-            self.embed_positions2(prev_output_tokens, positions=position_y)
-            if self.embed_positions2 is not None
-            else None
-        )
+            # embed positions
+            positions_x = (
+                self.embed_positions(prev_output_tokens, positions=position_x)
+                if self.embed_positions is not None
+                else None
+            )
+
+            # compute position slot-wise 
+            position_y = (torch.cumsum(unk_mask, dim=1).type_as(unk_mask) * pad_mask).long() + self.padding_idx
+            positions_y = (
+                self.embed_positions2(prev_output_tokens, positions=position_y)
+                if self.embed_positions2 is not None
+                else None
+            )
+        else:
+            # position within a slot
+            positions_x = (
+                self.embed_positions(prev_output_tokens, incremental_state=incremental_state)
+                if self.embed_positions is not None
+                else None
+            )
+            prev_output_tokens = prev_output_tokens[:, -1:]
+            if positions_x is not None:
+                positions_x = positions_x[:, -1:]
+
+            # position for each slot
+            position_y=self.slot_pos[:, None]
+            positions_y = (
+                self.embed_positions2(prev_output_tokens, positions=position_y)
+                if self.embed_positions2 is not None
+                else None
+            )
+            # import pdb
+            # pdb.set_trace()
+        ##########################################################################
 
         # embed tokens and positions
         if states is None:
@@ -568,7 +555,10 @@ class NATransformerDecoder(FairseqNATDecoder):
         else:
             # predict the length target (greedy for now)
             # TODO: implementing length-beam
-            pred_lengs = length_out.max(-1)[1]
+            # import pdb
+            # pdb.set_trace()
+            # pred_lengs = length_out.topk(3, dim=-1)[1]
+            pred_lengs = length_out.max(dim=-1)[1]
             if self.pred_length_offset:
                 length_tgt = pred_lengs - 128 + src_lengs
             else:

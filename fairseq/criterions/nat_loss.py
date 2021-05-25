@@ -47,9 +47,17 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 if dim is None
                 else x.float().mean(dim).type_as(x)
             )
+        # import pdb
+        # pdb.set_trace()
 
+        masks = None
         if masks is not None:
             outputs, targets = outputs[masks], targets[masks]
+
+        # import pdb
+        # pdb.set_trace()
+        targets = targets.view(-1)
+        outputs = outputs.view(targets.size(0),-1)
 
         if masks is not None and not masks.any():
             nll_loss = torch.tensor(0)
@@ -60,7 +68,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 losses = F.nll_loss(logits, targets.to(logits.device), reduction="none")
 
             else:  # soft-labels
-                losses = F.kl_div(logits, targets.to(logits.device), reduction="none")
+                losses = F.kl_div(logits.float(), targets.float().to(logits.device), reduction="none")
                 losses = losses.sum(-1)
 
             nll_loss = mean_ds(losses)
@@ -70,6 +78,10 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 )
             else:
                 loss = nll_loss
+
+        # import pdb
+        # pdb.set_trace()
+            
 
         loss = loss * factor
         return {"name": name, "loss": loss, "nll_loss": nll_loss, "factor": factor}
@@ -97,6 +109,8 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         losses, nll_loss = [], []
 
         for obj in outputs:
+            import pdb
+            pdb.set_trace()
             if outputs[obj].get("loss", None) is None:
                 _losses = self._compute_loss(
                     outputs[obj].get("out"),

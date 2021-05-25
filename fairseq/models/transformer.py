@@ -546,8 +546,8 @@ class TransformerEncoder(FairseqEncoder):
             "encoder_padding_mask": [encoder_padding_mask],  # B x T
             "encoder_embedding": [encoder_embedding],  # B x T x C
             "encoder_states": encoder_states,  # List[T x B x C]
-            "src_tokens": [],
-            "src_lengths": [],
+            "src_tokens": [src_tokens],
+            "src_lengths": [src_lengths],
         }
 
     @torch.jit.export

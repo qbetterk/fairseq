@@ -76,12 +76,14 @@ class Binarizer:
                     )
 
                 if filename.endswith("slot") and sar:
-                    if len(ids) == 2:  # line = "198\n" ; ids = tensor([50118, 2], dtype=torch.int32) 
+                    if len(ids) == 1:  # ids = tensor([2], dtype=torch.int32) 
+                        pass
+                    elif len(ids) == 2:  # line = "198\n" ; ids = tensor([50118, 2], dtype=torch.int32) 
                         ids = ids[1:]
                     elif len(ids) > 2:
                         target_str = " ".join([str(i) for i in ids.tolist()])
-                        slots = target_str.split(" 6 ")         # split into slots by ","
-                        slots = [slot+" 6 2" for slot in slots[:-1]]    # add ", <\s>" for each slot
+                        slots = target_str.split(f" {split} ")         # split into slots by ","
+                        slots = [slot+f" {split} "+str(dict.eos_index) for slot in slots[:-1]]    # add ", </s>" for each slot
                         ids = torch.tensor([int(i) for i in " ".join(slots).split()], dtype=ids.dtype) # new target
                     else:
                         import pdb
